@@ -8,6 +8,7 @@ class Connection:
         self.socket = socket
         self.addr = addr
         self.is_server = is_server
+
         if is_server and initial_packet:
             self.seq_num = 3804222960  # Server’s initial sequence number
             self.ack_num = initial_packet.seq_num + 1
@@ -17,11 +18,14 @@ class Connection:
             self.ack_num = 0
             self.state = "CLOSED"
         self.timeout = 10.0
+        self.data_buffer = []  # Buffer for received data
 
     def three_way_handshake(self) -> None:
         if self.is_server:
             if self.state != "SYN_RECEIVED":
                 raise RuntimeError("Invalid state for server handshake")
+            if not self.socket.is_listening:  # اصلاح: استفاده از self.socket به جای self.sock
+                raise RuntimeError("Socket is not in listening mode")
             syn_ack_packet = Packet(seq_num=self.seq_num, ack_num=self.ack_num, syn=True, ack=True)
             self.socket.send(syn_ack_packet, self.addr)
             print(f"Server: Sent SYN-ACK to {self.addr}")
@@ -86,10 +90,9 @@ class Connection:
             self.state = "CLOSE_WAIT"
             
             fin_packet = Packet(seq_num=self.seq_num, ack_num=self.ack_num, fin=True)
-            max_retries = 5  #باید درست شه--------------------------------------
+            max_retries = 5
             base_timeout = self.timeout
             for attempt in range(max_retries):
-                fin_packet = Packet(seq_num=self.seq_num, ack_num=self.ack_num, fin=True) 
                 self.socket.send(fin_packet, self.addr)
                 print(f"Sending FIN to {self.addr} (attempt {attempt + 1}/{max_retries})")
                 self.state = "LAST_ACK"
@@ -98,7 +101,7 @@ class Connection:
                     packet, addr = self.socket.receive()
                     if packet is None:
                         continue
-                    if addr == self.addr and packet.ack and packet.ack_num == self.seq_num +1:
+                    if addr == self.addr and packet.ack and packet.ack_num == self.seq_num + 1:
                         self.seq_num += 1
                         self.state = "CLOSED"
                         print(f"Received ACK for FIN from {self.addr}")
@@ -139,3 +142,14 @@ class Connection:
                         print(f"Connection closed with {self.addr}")
                         return
             raise TimeoutError("Timeout during connection close")
+
+    def buffer_data(self, packet: Packet):
+        """Store received data in buffer."""
+        if packet.data:
+            self.data_buffer.append(packet.data)
+
+    def get_buffered_data(self):
+        """Return and clear buffered data."""
+        data = self.data_buffer.copy()
+        self.data_buffer.clear()
+        return data

@@ -7,9 +7,16 @@ class UDPSocket:
         try:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             self.sock.settimeout(timeout)
+            self.backlog = None
+            self.is_listening = False
             print("UDP socket created successfully")
         except socket.error as e:
             raise socket.error(f"Failed to create UDP socket: {e}")
+    
+    def listen(self,backlog:int):
+        self.backlog = backlog
+        self.is_listening = True
+        print(f"Socket is listening with backlog {backlog}")
 
     def bind(self, host: str, port: int) -> None:
         try:
