@@ -102,6 +102,14 @@ def server(host: str = "127.0.0.1", port: int = 12345, backlog:int = 5) -> None:
             except socket.error as e:
                 print(f"Socket error: {e}")
                 raise
+            try:
+                conn, addr = conn_manager.accept()
+                print(f"Accepted connection from {addr}")
+                buffered_data = conn.get_buffered_data()
+                for data in buffered_data:
+                    print(f"Processing buffered data from {addr}: {data}\n")
+            except Exception as e:
+                print(f"Error in accept: {e}")
 
     except Exception as e:
         print(f"Server failed: {e}")
