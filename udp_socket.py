@@ -9,6 +9,7 @@ class UDPSocket:
             self.sock.settimeout(timeout)
             self.backlog = None
             self.is_listening = False
+            self.connection = None
             print("UDP socket created successfully")
         except socket.error as e:
             raise socket.error(f"Failed to create UDP socket: {e}")
@@ -25,16 +26,19 @@ class UDPSocket:
         except socket.error as e:
             raise socket.error(f"Failed to bind socket to {host}:{port}: {e}")
 
-    def send(self, packet: Packet, addr: Tuple[str, int]) -> None:
-        if not isinstance(packet, Packet):
-            raise ValueError("Packet must be an instance of Packet class")
-        try:
-            packet.src_port = self.sock.getsockname()[1]
-            packet.dst_port = addr[1]
-            print(f"Sending Packet to {addr}:\n{packet}")
-            self.sock.sendto(packet.to_bytes(), addr)
-        except socket.error as e:
-            raise socket.error(f"Failed to send packet to {addr}: {e}")
+    def send(self, arg, addr: Tuple[str, int]) -> None:
+            if isinstance(arg, Packet):
+                packet = arg
+                packet.src_port = self.sock.getsockname()[1]
+                packet.dst_port = addr[1]
+                print(f"Sending Packet to {addr}:\n{packet}")
+                self.sock.sendto(packet.to_bytes(), addr)
+            elif isinstance(arg, str):
+                if self.connection is None or self.connection.state != "ESTABLISHED":
+                    raise RuntimeError("Connection not established")
+                self.connection.send(arg)
+            else:
+                raise ValueError("Argument must be a Packet or a string")
 
     def receive(self) -> Tuple[Optional[Packet], Optional[Tuple[str, int]]]:
         try:

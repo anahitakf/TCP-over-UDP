@@ -38,7 +38,7 @@ def server(host: str = "127.0.0.1", port: int = 12345, backlog:int = 5) -> None:
                             conn_manager.add_incomplete(conn)
                             conn.three_way_handshake()
                             conn_manager.move_to_completed(addr)
-                            print(f"connection with {addr} Estanlished\n")
+                            print(f"connection with {addr} Established and moved to completed buffer\n")
                         except (TimeoutError, RuntimeError) as e:
                             print(f"Failed to establish connection with {addr}: {e}\n")
                             conn_manager.remove_connection(addr)
@@ -58,7 +58,7 @@ def server(host: str = "127.0.0.1", port: int = 12345, backlog:int = 5) -> None:
                                 print(f"Ignoring FIN in state {conn.state} from {addr}\n")
                         elif packet.data:
                             print(f"Received data from {addr}: {packet.data}\n")
-                            if conn.state == "ESTABLISHED":
+                            if conn.state in ["ESTABLISHED", "CLOSE_WAIT"]:
                                 conn.buffer_data(packet)
                                 if packet.seq_num == conn.ack_num:
                                     ack_packet = Packet(
@@ -104,10 +104,12 @@ def server(host: str = "127.0.0.1", port: int = 12345, backlog:int = 5) -> None:
                 raise
             try:
                 conn, addr = conn_manager.accept()
+                sock.connection = conn
                 print(f"Accepted connection from {addr}")
                 buffered_data = conn.get_buffered_data()
                 for data in buffered_data:
                     print(f"Processing buffered data from {addr}: {data}\n")
+                    sock.send(f"Server received: {data}", addr)
             except Exception as e:
                 print(f"Error in accept: {e}")
 

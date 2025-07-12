@@ -1,4 +1,5 @@
 import time
+import threading
 from typing import Tuple, Optional
 from packet import Packet
 from udp_socket import UDPSocket
@@ -19,6 +20,13 @@ class Connection:
             self.state = "CLOSED"
         self.timeout = 10.0
         self.data_buffer = []  # Buffer for received data
+        self.send_buffer = []  # buffer for send data
+        self.buffer_size = 1024  #max buffer size
+        self.send_lock = threading.Lock()  
+        self.send_condition = threading.Condition(self.send_lock)  
+        self.send_thread = threading.Thread(target=self._send_data_thread)
+        self.send_thread.daemon = True
+        self.send_thread.start()
 
     def three_way_handshake(self) -> None:
         if self.is_server:
@@ -153,3 +161,27 @@ class Connection:
         data = self.data_buffer.copy()
         self.data_buffer.clear()
         return data
+    
+    def send(self, data: str) -> None:
+        if self.state != "ESTABLISHED":
+            raise RuntimeError("Connection not established")
+        with self.send_condition:
+            while sum(len(d) for d in self.send_buffer) + len(data) > self.buffer_size:
+                print(f"Buffer full, blocking until space is available...")
+                self.send_condition.wait()
+            self.send_buffer.append(data)
+            print(f"Data added to send buffer: {data}")
+            self.send_condition.notify_all()  
+
+    def _send_data_thread(self):
+        while True:
+            with self.send_condition:
+                while not self.send_buffer:
+                    self.send_condition.wait()  
+                data = self.send_buffer.pop(0)
+                packet = Packet(seq_num=self.seq_num, ack_num=self.ack_num, data=data)
+                self.socket.send(packet, self.addr)
+                print(f"Sending data: {data}")
+                self.seq_num += len(data)
+                self.send_condition.notify_all()  
+            time.sleep(0.1) 
