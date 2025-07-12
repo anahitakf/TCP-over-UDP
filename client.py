@@ -30,15 +30,9 @@ def client(host: str = "127.0.0.1", port: int = 12345, max_retries: int = 3):
         with conn.send_condition:
             while conn.send_buffer:
                 conn.send_condition.wait()
-        start_time = time.time()
-        while time.time() - start_time < conn.timeout:
-            packet, addr = sock.receive()
-            if packet and addr == (host, port) and packet.ack and packet.ack_num == conn.seq_num:
-                print(f"Received ACK for data from {addr}")
-                break
-        else:
-            raise TimeoutError("Timeout waiting for ACK for data")
-
+                print("Waiting for send buffer to empty...")
+        
+        print("Data sent successfully")
         conn.close()
     except Exception as e:
         print(f"Client error: {e}")

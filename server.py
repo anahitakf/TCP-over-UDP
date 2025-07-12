@@ -6,17 +6,19 @@ import time
 from typing import Dict
 from ConnectionManager import ConnectionManager
 
-def server(host: str = "127.0.0.1", port: int = 12345, backlog:int = 5) -> None:
+def server(host: str = "127.0.0.1", port: int = 12345, backlog: int = 5) -> None:
     sock = None
     try:
         sock = UDPSocket(timeout=10.0)
         sock.bind(host, port)
         sock.listen(backlog)
         print(f"Server successfully bound to {host}:{port}")
-        conn_manager = ConnectionManager(backlog=backlog)   
+        conn_manager = ConnectionManager(backlog=backlog, socket=sock)  # Pass socket to ConnectionManager
+        sock.connection_manager = conn_manager  # اتصال conn_manager به سوکت
+        should_stop = False  # Flag to control server shutdown
 
         print(f"Server started, listening on {host}:{port}...")
-        while True:
+        while sock.is_listening and not should_stop:
             try:
                 data, addr = sock.sock.recvfrom(1024)
                 print(f"Server received raw data from {addr}: {data}\n")
@@ -34,7 +36,7 @@ def server(host: str = "127.0.0.1", port: int = 12345, backlog:int = 5) -> None:
                             if len(conn_manager.incomplete_connections) >= backlog:
                                 print(f"backlog full, ignoring SYN from {addr}\n")
                                 continue
-                            conn = Connection(sock , addr , is_server=True , initial_packet= packet)
+                            conn = Connection(sock, addr, is_server=True, initial_packet=packet)
                             conn_manager.add_incomplete(conn)
                             conn.three_way_handshake()
                             conn_manager.move_to_completed(addr)
@@ -44,7 +46,7 @@ def server(host: str = "127.0.0.1", port: int = 12345, backlog:int = 5) -> None:
                             conn_manager.remove_connection(addr)
                             continue
                     else:
-                        print(f"Rejecting non-SYN packet from unknown {addr}: {packet}\n")
+                        print(f"Rejecting non-SYN packet or SYN packet while not listening from {addr}: {packet}\n")
                         continue
                 else:
                     try:
@@ -75,7 +77,6 @@ def server(host: str = "127.0.0.1", port: int = 12345, backlog:int = 5) -> None:
                                         print(f"Processing buffered data from {addr}: {data}\n")
                                 else:
                                     print(f"Out-of-order packet from {addr}, expected seq_num={conn.ack_num}, got {packet.seq_num}\n")
-
                             else:
                                 print(f"Out-of-order packet from {addr}, expected seq_num={conn.ack_num}, got {packet.seq_num}\n")
                         elif packet.ack and not packet.syn:
@@ -110,6 +111,9 @@ def server(host: str = "127.0.0.1", port: int = 12345, backlog:int = 5) -> None:
                 for data in buffered_data:
                     print(f"Processing buffered data from {addr}: {data}\n")
                     sock.send(f"Server received: {data}", addr)
+            except RuntimeError as e:
+                print(f"Error in accept: {e}")
+                should_stop = True  # Stop server loop if no connections are available
             except Exception as e:
                 print(f"Error in accept: {e}")
 

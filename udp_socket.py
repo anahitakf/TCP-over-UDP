@@ -10,6 +10,7 @@ class UDPSocket:
             self.backlog = None
             self.is_listening = False
             self.connection = None
+            self.connection_manager = None
             print("UDP socket created successfully")
         except socket.error as e:
             raise socket.error(f"Failed to create UDP socket: {e}")
@@ -53,6 +54,27 @@ class UDPSocket:
             raise socket.error(f"Failed to receive packet: {e}")
 
     def close(self) -> None:
+        if self.is_listening:
+            # رفتار سوکت سرور
+            self.is_listening = False
+            print("Server socket is closing. No new connections will be accepted.")
+            if hasattr(self, 'connection_manager') and self.connection_manager:
+                # بستن اتصالات ناتمام با استفاده از ConnectionManager
+                try:
+                    self.connection_manager.close_incomplete_connections()
+                    print("All incomplete connections closed.")
+                except Exception as e:
+                    print(f"Error closing incomplete connections: {e}")
+                # اتصالات کامل‌شده معتبر باقی می‌مانند
+                print("Completed connections remain valid.")
+        else:
+            # رفتار سوکت کلاینت
+            if self.connection:
+                try:
+                    self.connection.close()
+                    print("Client connection closed.")
+                except Exception as e:
+                    print(f"Error closing client connection: {e}")
         try:
             self.sock.close()
             print("Socket closed successfully")

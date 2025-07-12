@@ -7,10 +7,11 @@ from typing import Dict, Optional
 from typing import Tuple, Optional
 
 class ConnectionManager:
-    def __init__(self, backlog: int):
+    def __init__(self, backlog: int, socket: UDPSocket = None):
         self.incomplete_connections: Dict[tuple[str, int], Connection] = {}  # SYN Queue
         self.completed_connections: Dict[tuple[str, int], Connection] = {}   # Accept Queue
         self.backlog = backlog
+        self.socket = socket  # Reference to UDPSocket for checking is_listening
 
     def add_incomplete(self, conn: Connection):
         if len(self.incomplete_connections) >= self.backlog:
@@ -36,11 +37,21 @@ class ConnectionManager:
             if self.completed_connections[addr].state == "CLOSED":
                 self.completed_connections.pop(addr)
 
+    def close_incomplete_connections(self) -> None:
+        """Close all incomplete connections by sending FIN."""
+        for addr, conn in list(self.incomplete_connections.items()):
+            try:
+                conn.close()
+                print(f"Closed incomplete connection with {addr}")
+                self.remove_connection(addr)
+            except Exception as e:
+                print(f"Error closing incomplete connection with {addr}: {e}")
+
     def accept(self) -> Tuple[Connection, Tuple[str, int]]: 
-        while True:
-            if self.completed_connections:
-                addr, conn = next(iter(self.completed_connections.items()))
-                if conn.state == "ESTABLISHED":
-                    return conn, addr
-            print("No connections available, waiting for new connections...")
-            time.sleep(1)
+        if self.socket and not self.socket.is_listening and not self.completed_connections:
+            raise RuntimeError("Server socket is closed and no completed connections are available")
+        if self.completed_connections:
+            addr, conn = next(iter(self.completed_connections.items()))
+            if conn.state == "ESTABLISHED":
+                return conn, addr
+        raise RuntimeError("No established connections available")
