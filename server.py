@@ -6,6 +6,7 @@ import time
 from typing import Dict
 from ConnectionManager import ConnectionManager
 
+
 def server(host: str = "127.0.0.1", port: int = 12345, backlog: int = 5) -> None:
     sock = None
     try:

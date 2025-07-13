@@ -79,3 +79,4 @@ class Packet:
                 self.src_port == other.src_port and
                 self.dst_port == other.dst_port and
                 self.window_size == other.window_size)
+    

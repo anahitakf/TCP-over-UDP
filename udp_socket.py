@@ -65,7 +65,6 @@ class UDPSocket:
                     print("All incomplete connections closed.")
                 except Exception as e:
                     print(f"Error closing incomplete connections: {e}")
-                # اتصالات کامل‌شده معتبر باقی می‌مانند
                 print("Completed connections remain valid.")
         else:
             # رفتار سوکت کلاینت

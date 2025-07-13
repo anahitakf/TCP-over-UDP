@@ -23,7 +23,7 @@ def client(host: str = "127.0.0.1", port: int = 12345, max_retries: int = 3):
                 if retries == max_retries:
                     raise Exception(f"Failed to establish connection after {max_retries} attempts: {e}")
                 print(f"Retry {retries}/{max_retries} due to: {e}")
-                time.sleep(1)  # Wait before retrying
+                time.sleep(1) 
         
         data_to_send = "Hi from Client!"
         sock.send(data_to_send, (host, port))

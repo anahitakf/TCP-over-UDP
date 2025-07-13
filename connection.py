@@ -11,7 +11,7 @@ class Connection:
         self.is_server = is_server
 
         if is_server and initial_packet:
-            self.seq_num = 3804222960  # Server’s initial sequence number
+            self.seq_num = 3804222960  
             self.ack_num = initial_packet.seq_num + 1
             self.state = "SYN_RECEIVED"
         else:

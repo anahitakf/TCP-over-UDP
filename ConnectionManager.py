@@ -11,7 +11,7 @@ class ConnectionManager:
         self.incomplete_connections: Dict[tuple[str, int], Connection] = {}  # SYN Queue
         self.completed_connections: Dict[tuple[str, int], Connection] = {}   # Accept Queue
         self.backlog = backlog
-        self.socket = socket  # Reference to UDPSocket for checking is_listening
+        self.socket = socket  
 
     def add_incomplete(self, conn: Connection):
         if len(self.incomplete_connections) >= self.backlog:
