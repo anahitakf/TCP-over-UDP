@@ -3,10 +3,11 @@ import threading
 from typing import Tuple, Optional
 from packet import Packet
 from udp_socket import UDPSocket
+import random
 
-MSS = 512  # به عنوان مثال، 512 بایت
-WINDOW_SIZE = 1024  # به عنوان مثال، 1024 بایت
-TIMEOUT = 5.0  # به عنوان مثال، 5 ثانیه
+MSS = 512  # Maximum Segment Size
+WINDOW_SIZE = 1024  # Sliding window size
+TIMEOUT = 5.0  # Timeout for retransmissions
 
 class Connection:
     def __init__(self, socket: UDPSocket, addr: Tuple[str, int], is_server: bool = False, initial_packet: Optional[Packet] = None):
@@ -15,11 +16,11 @@ class Connection:
         self.is_server = is_server
 
         if is_server and initial_packet:
-            self.seq_num = 3804222960  
+            self.seq_num = random.randint(1000000000, 4000000000)  # Random initial sequence number
             self.ack_num = initial_packet.seq_num + 1
             self.state = "SYN_RECEIVED"
         else:
-            self.seq_num = 1133012452 if not is_server else 3804222960
+            self.seq_num = random.randint(1000000000, 4000000000)  # Random initial sequence number
             self.ack_num = 0
             self.state = "CLOSED"
 
@@ -28,9 +29,9 @@ class Connection:
         self.window_size = WINDOW_SIZE
         self.data_buffer = []  # Buffer for received data
         self.send_buffer = []  # Buffer for send data
-        self.send_lock = threading.Lock()  
-        self.send_condition = threading.Condition(self.send_lock) 
-        self._stop_thread = threading.Event() 
+        self.send_lock = threading.Lock()
+        self.send_condition = threading.Condition(self.send_lock)
+        self._stop_thread = threading.Event()
         self.send_thread = threading.Thread(target=self._send_data_thread)
         self.send_thread.daemon = True
         self.send_thread.start()
@@ -45,50 +46,45 @@ class Connection:
         self.buffer_thread.daemon = True
         self.buffer_thread.start()
 
-    def _buffer_manager_thread(self):
-        while not self._stop_thread.is_set():
-            if self.state != "ESTABLISHED":
-                time.sleep(0.1)  # Wait until handshake completes
-                continue
-            with self.send_lock:
-                # Sending data from send_buffer
-                while self.send_buffer and len(self.sent_packets) < self.window_size // MSS:
-                    data = self.send_buffer.pop(0)
-                    packet = Packet(seq_num=self.seq_num, ack_num=self.ack_num, data=data)
-                    self._send_packet(packet)
-                    self.seq_num += len(data)
-                
-                # Check for timeouts and retransmit
-                current_time = time.time()
-                for seq_num, (packet, timestamp) in list(self.sent_packets.items()):
-                    if current_time - timestamp > TIMEOUT:
-                        self.socket.send(packet, self.addr)
-                        self.sent_packets[seq_num] = (packet, current_time)
-                        print(f"Retransmitted packet with seq_num={seq_num} due to timeout")
-                
-                # Process out-of-order received data
-                while self.expected_seq_num in self.recv_buffer:
-                    self.data_buffer.append(self.recv_buffer.pop(self.expected_seq_num))
-                    self.expected_seq_num += len(self.data_buffer[-1])
-                    ack_packet = Packet(seq_num=self.seq_num, ack_num=self.expected_seq_num, ack=True , window_size=2**31-1)
-                    self.socket.send(ack_packet, self.addr)
-                    print(f"Processed out-of-order data, sent ACK for {self.expected_seq_num}")
-            
-            # Receive and process packets
-            packet, addr = self.socket.receive()
-            if packet and addr == self.addr:
-                if packet.ack:
-                    self._process_ack(packet)
-                if packet.data:
-                    self.buffer_data(packet)
-            
-            time.sleep(0.1)  # Prevent CPU overload
+    def _is_packet_valid(self, packet: Packet) -> bool:
+        """Check if a packet is valid based on state and sequence/acknowledgement numbers."""
+        if packet.rst:
+            return False  # RST packets are always considered invalid to trigger RST response
+        if self.state == "CLOSED":
+            return packet.syn and not (packet.ack or packet.fin or packet.data)  # Only SYN allowed
+        elif self.state == "SYN_SENT":
+            return packet.syn and packet.ack and packet.ack_num == self.seq_num + 1
+        elif self.state == "SYN_RECEIVED":
+            return packet.ack and not (packet.syn or packet.fin or packet.data) and packet.ack_num == self.seq_num
+        elif self.state == "ESTABLISHED":
+            if packet.data:
+                return packet.seq_num >= self.expected_seq_num
+            if packet.ack:
+                return packet.ack_num >= self.window_base
+            if packet.fin:
+                return True
+            return False
+        elif self.state in ["FIN_WAIT_1", "FIN_WAIT_2", "CLOSE_WAIT", "LAST_ACK"]:
+            return (packet.ack and packet.ack_num >= self.seq_num) or packet.fin
+        return False
+
+    def _send_rst(self, packet: Packet = None) -> None:
+        """Send an RST packet in response to an invalid packet."""
+        rst_packet = Packet(
+            seq_num=self.seq_num,
+            ack_num=self.ack_num if packet and packet.data else 0,
+            rst=True,
+            src_port=self.socket.sock.getsockname()[1],
+            dst_port=self.addr[1]
+        )
+        self.socket.send(rst_packet, self.addr)
+        print(f"Sent RST to {self.addr} due to invalid packet")
 
     def three_way_handshake(self) -> None:
         if self.is_server:
             if self.state != "SYN_RECEIVED":
                 raise RuntimeError("Invalid state for server handshake")
-            if not self.socket.is_listening:  
+            if not self.socket.is_listening:
                 raise RuntimeError("Socket is not in listening mode")
             syn_ack_packet = Packet(seq_num=self.seq_num, ack_num=self.ack_num, syn=True, ack=True)
             self.socket.send(syn_ack_packet, self.addr)
@@ -100,8 +96,15 @@ class Connection:
                     raise TimeoutError("Timeout waiting for ACK")
                 packet, addr = self.socket.receive()
                 if packet is None:
-                    continue  # Timeout, keep waiting
-                if addr == self.addr and packet.ack and packet.ack_num == self.seq_num:
+                    continue
+                if addr != self.addr:
+                    continue
+                if packet.rst:
+                    raise RuntimeError("Received RST during handshake")
+                if not self._is_packet_valid(packet):
+                    self._send_rst(packet)
+                    continue
+                if packet.ack and packet.ack_num == self.seq_num:
                     self.state = "ESTABLISHED"
                     print(f"Server: Connection established with {self.addr}")
                     return
@@ -116,8 +119,15 @@ class Connection:
                     raise TimeoutError("Timeout waiting for SYN-ACK")
                 packet, addr = self.socket.receive()
                 if packet is None:
-                    continue  # Timeout, keep waiting
-                if addr == self.addr and packet.syn and packet.ack:
+                    continue
+                if addr != self.addr:
+                    continue
+                if packet.rst:
+                    raise RuntimeError("Received RST during handshake")
+                if not self._is_packet_valid(packet):
+                    self._send_rst(packet)
+                    continue
+                if packet.syn and packet.ack:
                     print(f"Client: Received SYN-ACK from {addr}")
                     self.ack_num = packet.seq_num + 1
                     self.seq_num += 1
@@ -138,10 +148,17 @@ class Connection:
         while time.time() - start_time < self.timeout:
             recv_packet, addr = self.socket.receive()
             if recv_packet is None:
-                continue  # Timeout, keep waiting
-            if addr == self.addr and recv_packet.ack and recv_packet.ack_num == self.seq_num + len(data):
+                continue
+            if addr != self.addr:
+                continue
+            if recv_packet.rst:
+                raise RuntimeError("Received RST during data transfer")
+            if not self._is_packet_valid(recv_packet):
+                self._send_rst(recv_packet)
+                continue
+            if recv_packet.ack and recv_packet.ack_num == self.seq_num + len(data.encode('utf-8')):
                 print(f"Received ACK for data from {self.addr}")
-                self.seq_num += len(data)
+                self.seq_num += len(data.encode('utf-8'))
                 return
         raise TimeoutError("Timeout waiting for ACK for data")
 
@@ -152,15 +169,15 @@ class Connection:
                 self.sent_packets[packet.seq_num] = (packet, time.time())
                 print(f"Sent packet with seq_num={packet.seq_num}")
             else:
-                self.send_buffer.insert(0, packet.data)  # اگر خارج از پنجره باشد، دوباره به بافر اضافه شود
+                self.send_buffer.insert(0, packet.data)
 
     def _process_ack(self, packet: Packet) -> None:
         with self.send_lock:
             if packet.ack_num > self.window_base:
                 for seq_num in list(self.sent_packets.keys()):
-                    if seq_num + len(self.sent_packets[seq_num][0].data) <= packet.ack_num:
+                    if seq_num + len(self.sent_packets[seq_num][0].data.encode('utf-8')) <= packet.ack_num:
                         del self.sent_packets[seq_num]
-                self.window_base = packet.ack_num  
+                self.window_base = packet.ack_num
                 self.send_condition.notify_all()
             if packet.ack_num in self.ack_counts:
                 self.ack_counts[packet.ack_num] += 1
@@ -179,6 +196,9 @@ class Connection:
 
     def handle_fin(self, packet: Packet) -> None:
         if self.state == "ESTABLISHED":
+            if not self._is_packet_valid(packet):
+                self._send_rst(packet)
+                return
             ack_packet = Packet(seq_num=self.seq_num, ack_num=packet.seq_num + 1, ack=True)
             self.socket.send(ack_packet, self.addr)
             print(f"Sending ACK for FIN to {self.addr}")
@@ -197,7 +217,15 @@ class Connection:
                     packet, addr = self.socket.receive()
                     if packet is None:
                         continue
-                    if addr == self.addr and packet.ack and packet.ack_num == self.seq_num + 1:
+                    if addr != self.addr:
+                        continue
+                    if packet.rst:
+                        self.state = "CLOSED"
+                        raise RuntimeError("Received RST during FIN handling")
+                    if not self._is_packet_valid(packet):
+                        self._send_rst(packet)
+                        continue
+                    if packet.ack and packet.ack_num == self.seq_num + 1:
                         self.seq_num += 1
                         self.state = "CLOSED"
                         print(f"Received ACK for FIN from {self.addr}")
@@ -222,47 +250,98 @@ class Connection:
         while time.time() - start_time < self.timeout:
             packet, addr = self.socket.receive()
             if packet is None:
-                continue  # Timeout, keep waiting
-            if addr == self.addr:
-                if packet.ack and self.state == "FIN_WAIT_1":
-                    self.state = "FIN_WAIT_2"
-                    print(f"Received ACK for FIN from {self.addr}")
-                elif packet.fin and self.state == "FIN_WAIT_2":
-                    ack_packet = Packet(seq_num=self.seq_num, ack_num=packet.seq_num + 1, ack=True)
-                    self.socket.send(ack_packet, self.addr)
-                    print(f"Sending ACK for FIN to {self.addr}")
-                    self.state = "TIME_WAIT"
-                    time.sleep(2)  # Simulate TIME_WAIT
-                    self.state = "CLOSED"
-                    print(f"Connection closed with {self.addr}")
-                    return
-                elif packet.ack and self.state == "LAST_ACK":
-                    self.state = "CLOSED"
-                    print(f"Received ACK for FIN from {self.addr}")
-                    return
+                continue
+            if addr != self.addr:
+                continue
+            if packet.rst:
+                self.state = "CLOSED"
+                raise RuntimeError("Received RST during close")
+            if not self._is_packet_valid(packet):
+                self._send_rst(packet)
+                continue
+            if packet.ack and self.state == "FIN_WAIT_1":
+                self.state = "FIN_WAIT_2"
+                print(f"Received ACK for FIN from {self.addr}")
+            elif packet.fin and self.state == "FIN_WAIT_2":
+                ack_packet = Packet(seq_num=self.seq_num, ack_num=packet.seq_num + 1, ack=True)
+                self.socket.send(ack_packet, self.addr)
+                print(f"Sending ACK for FIN to {self.addr}")
+                self.state = "TIME_WAIT"
+                time.sleep(2)
+                self.state = "CLOSED"
+                print(f"Connection closed with {self.addr}")
+                return
+            elif packet.ack and self.state == "LAST_ACK":
+                self.state = "CLOSED"
+                print(f"Received ACK for FIN from {self.addr}")
+                return
         raise TimeoutError("Timeout during connection close")
 
     def buffer_data(self, packet: Packet) -> None:
+        if packet.rst:
+            self._send_rst(packet)
+            return
+        if not self._is_packet_valid(packet):
+            self._send_rst(packet)
+            return
         if packet.data:
             with self.send_lock:
                 if packet.seq_num == self.expected_seq_num:
                     self.data_buffer.append(packet.data)
-                    self.expected_seq_num += len(packet.data)
-                    # ارسال ACK تجمیعی
-                    ack_packet = Packet(seq_num=self.seq_num, ack_num=self.expected_seq_num, ack=True , window_size=2**31-1)
+                    self.expected_seq_num += len(packet.data.encode('utf-8'))
+                    ack_packet = Packet(seq_num=self.seq_num, ack_num=self.expected_seq_num, ack=True, window_size=2**31-1)
                     self.socket.send(ack_packet, self.addr)
                     print(f"Sent ACK for seq_num={packet.seq_num}")
                 elif packet.seq_num > self.expected_seq_num:
-                    self.recv_buffer[packet.seq_num] = packet.data  # ذخیره خارج از نوبت
-                    ack_packet = Packet(seq_num=self.seq_num, ack_num=self.expected_seq_num, ack=True , window_size=2**31-1)
+                    self.recv_buffer[packet.seq_num] = packet.data
+                    ack_packet = Packet(seq_num=self.seq_num, ack_num=self.expected_seq_num, ack=True, window_size=2**31-1)
                     self.socket.send(ack_packet, self.addr)
                     print(f"Stored out-of-order packet seq_num={packet.seq_num}, sent ACK for {self.expected_seq_num}")
                 elif packet.seq_num < self.expected_seq_num:
-                    # نادیده گرفتن بسته تکراری و ارسال ACK
-                    ack_packet = Packet(seq_num=self.seq_num, ack_num=self.expected_seq_num, ack=True , window_size=2**31-1)
+                    ack_packet = Packet(seq_num=self.seq_num, ack_num=self.expected_seq_num, ack=True, window_size=2**31-1)
                     self.socket.send(ack_packet, self.addr)
                     print(f"Ignored duplicate packet seq_num={packet.seq_num}, sent ACK for {self.expected_seq_num}")
 
+    def _buffer_manager_thread(self):
+        while not self._stop_thread.is_set():
+            if self.state != "ESTABLISHED":
+                time.sleep(0.1)
+                continue
+            with self.send_lock:
+                while self.send_buffer and len(self.sent_packets) < self.window_size // MSS:
+                    data = self.send_buffer.pop(0)
+                    packet = Packet(seq_num=self.seq_num, ack_num=self.ack_num, data=data)
+                    self._send_packet(packet)
+                    self.seq_num += len(data.encode('utf-8'))
+                
+                current_time = time.time()
+                for seq_num, (packet, timestamp) in list(self.sent_packets.items()):
+                    if current_time - timestamp > TIMEOUT:
+                        self.socket.send(packet, self.addr)
+                        self.sent_packets[seq_num] = (packet, current_time)
+                        print(f"Retransmitted packet with seq_num={seq_num} due to timeout")
+                
+                while self.expected_seq_num in self.recv_buffer:
+                    self.data_buffer.append(self.recv_buffer.pop(self.expected_seq_num))
+                    self.expected_seq_num += len(self.data_buffer[-1].encode('utf-8'))
+                    ack_packet = Packet(seq_num=self.seq_num, ack_num=self.expected_seq_num, ack=True, window_size=2**31-1)
+                    self.socket.send(ack_packet, self.addr)
+                    print(f"Processed out-of-order data, sent ACK for {self.expected_seq_num}")
+            
+            packet, addr = self.socket.receive()
+            if packet and addr == self.addr:
+                if packet.rst:
+                    self._send_rst(packet)
+                    continue
+                if not self._is_packet_valid(packet):
+                    self._send_rst(packet)
+                    continue
+                if packet.ack:
+                    self._process_ack(packet)
+                if packet.data:
+                    self.buffer_data(packet)
+            
+            time.sleep(0.1)
 
     def get_buffered_data(self):
         data = self.data_buffer.copy()
@@ -272,13 +351,12 @@ class Connection:
     def send(self, data: str) -> None:
         if self.state != "ESTABLISHED":
             raise RuntimeError("Connection not established")
-        # تقسیم‌بندی داده‌ها به بسته‌های کوچک‌تر بر اساس MSS
         segments = [data[i:i + MSS] for i in range(0, len(data), MSS)]
         with self.send_lock:
             for segment in segments:
-                    self.send_buffer.append(segment)
-                    print(f"Data added to send buffer: {segment}")
-            self.send_condition.notify_all()  
+                self.send_buffer.append(segment)
+                print(f"Data added to send buffer: {segment}")
+            self.send_condition.notify_all()
 
     def _send_data_thread(self):
         while not self._stop_thread.is_set():
@@ -295,16 +373,25 @@ class Connection:
                 start_time = time.time()
                 while time.time() - start_time < self.timeout:
                     recv_packet, addr = self.socket.receive()
-                    if recv_packet and addr == self.addr and recv_packet.ack and recv_packet.ack_num == self.seq_num + len(data):
+                    if recv_packet is None:
+                        continue
+                    if addr != self.addr:
+                        continue
+                    if recv_packet.rst:
+                        raise RuntimeError("Received RST during data transfer")
+                    if not self._is_packet_valid(recv_packet):
+                        self._send_rst(recv_packet)
+                        continue
+                    if recv_packet.ack and recv_packet.ack_num == self.seq_num + len(data.encode('utf-8')):
                         with self.send_lock:
-                            self.seq_num += len(data)
+                            self.seq_num += len(data.encode('utf-8'))
                             print(f"received ACK for data from {self.addr}")
                             self.send_condition.notify_all()
                         break
                 else:
                     print(f"timeout by waiting for ACK of data: {data}")
                     with self.send_lock:
-                        self.send_buffer.insert(0, data)     
+                        self.send_buffer.insert(0, data)
             except Exception as e:
                 print(f"error in sending data: {e}")
                 with self.send_lock:

@@ -1,14 +1,17 @@
 import json
 from typing import Optional
+import random
 
 class Packet:
-    def __init__(self, seq_num: int, ack_num: int = 0, data: str = "", syn: bool = False, ack: bool = False, fin: bool = False, src_port: int = None, dst_port: int = None, window_size: int = 128):  #change window size
+    def __init__(self, seq_num: int, ack_num: int = 0, data: str = "", syn: bool = False, ack: bool = False, fin: bool = False, rst: bool = False, src_port: int = None, dst_port: int = None, window_size: int = 128):
         self.seq_num = seq_num
         self.ack_num = ack_num
         self.data = data
+        self.payload_length = len(data.encode('utf-8'))  
         self.syn = syn
         self.ack = ack
         self.fin = fin
+        self.rst = rst
         self.src_port = src_port
         self.dst_port = dst_port
         self.window_size = window_size
@@ -18,9 +21,11 @@ class Packet:
             "seq_num": self.seq_num,
             "ack_num": self.ack_num,
             "data": self.data,
+            "payload_length": self.payload_length,
             "syn": self.syn,
             "ack": self.ack,
             "fin": self.fin,
+            "rst": self.rst,
             "src_port": self.src_port,
             "dst_port": self.dst_port,
             "window_size": self.window_size
@@ -38,6 +43,7 @@ class Packet:
                 syn=bool(packet_dict["syn"]),
                 ack=bool(packet_dict["ack"]),
                 fin=bool(packet_dict["fin"]),
+                rst=bool(packet_dict.get("rst", False)),
                 src_port=packet_dict.get("src_port"),
                 dst_port=packet_dict.get("dst_port"),
                 window_size=packet_dict.get("window_size", 128)
@@ -53,6 +59,8 @@ class Packet:
             flags.append("ACK")
         if self.fin:
             flags.append("FIN")
+        if self.rst:
+            flags.append("RST")
         flags_str = " | ".join(flags) if flags else "None"
         return (
             f"\n Packet Details:\n"
@@ -63,7 +71,7 @@ class Packet:
             f"Acknowledgement Number: {self.ack_num}\n"
             f"Control Flags: {flags_str}\n"
             f"Window Size: {self.window_size}\n"
-            f"Data Length: {len(self.data)} Bytes\n"
+            f"Payload Length: {self.payload_length} Bytes\n"
             f"Data Payload: {self.data or 'None'}"
         )
 
@@ -73,10 +81,11 @@ class Packet:
         return (self.seq_num == other.seq_num and
                 self.ack_num == other.ack_num and
                 self.data == other.data and
+                self.payload_length == other.payload_length and
                 self.syn == other.syn and
                 self.ack == other.ack and
                 self.fin == other.fin and
+                self.rst == other.rst and
                 self.src_port == other.src_port and
                 self.dst_port == other.dst_port and
                 self.window_size == other.window_size)
-    
