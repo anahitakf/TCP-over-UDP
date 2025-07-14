@@ -70,7 +70,7 @@ class Connection:
                 while self.expected_seq_num in self.recv_buffer:
                     self.data_buffer.append(self.recv_buffer.pop(self.expected_seq_num))
                     self.expected_seq_num += len(self.data_buffer[-1])
-                    ack_packet = Packet(seq_num=self.seq_num, ack_num=self.expected_seq_num, ack=True)
+                    ack_packet = Packet(seq_num=self.seq_num, ack_num=self.expected_seq_num, ack=True , window_size=2**31-1)
                     self.socket.send(ack_packet, self.addr)
                     print(f"Processed out-of-order data, sent ACK for {self.expected_seq_num}")
             
@@ -249,17 +249,17 @@ class Connection:
                     self.data_buffer.append(packet.data)
                     self.expected_seq_num += len(packet.data)
                     # ارسال ACK تجمیعی
-                    ack_packet = Packet(seq_num=self.seq_num, ack_num=self.expected_seq_num, ack=True)
+                    ack_packet = Packet(seq_num=self.seq_num, ack_num=self.expected_seq_num, ack=True , window_size=2**31-1)
                     self.socket.send(ack_packet, self.addr)
                     print(f"Sent ACK for seq_num={packet.seq_num}")
                 elif packet.seq_num > self.expected_seq_num:
                     self.recv_buffer[packet.seq_num] = packet.data  # ذخیره خارج از نوبت
-                    ack_packet = Packet(seq_num=self.seq_num, ack_num=self.expected_seq_num, ack=True)
+                    ack_packet = Packet(seq_num=self.seq_num, ack_num=self.expected_seq_num, ack=True , window_size=2**31-1)
                     self.socket.send(ack_packet, self.addr)
                     print(f"Stored out-of-order packet seq_num={packet.seq_num}, sent ACK for {self.expected_seq_num}")
                 elif packet.seq_num < self.expected_seq_num:
                     # نادیده گرفتن بسته تکراری و ارسال ACK
-                    ack_packet = Packet(seq_num=self.seq_num, ack_num=self.expected_seq_num, ack=True)
+                    ack_packet = Packet(seq_num=self.seq_num, ack_num=self.expected_seq_num, ack=True , window_size=2**31-1)
                     self.socket.send(ack_packet, self.addr)
                     print(f"Ignored duplicate packet seq_num={packet.seq_num}, sent ACK for {self.expected_seq_num}")
 
@@ -276,7 +276,6 @@ class Connection:
         segments = [data[i:i + MSS] for i in range(0, len(data), MSS)]
         with self.send_lock:
             for segment in segments:
-                if sum(len(d) for d in self.send_buffer) + len(segment) <= self.window_size:
                     self.send_buffer.append(segment)
                     print(f"Data added to send buffer: {segment}")
             self.send_condition.notify_all()  
