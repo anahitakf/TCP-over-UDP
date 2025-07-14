@@ -4,6 +4,10 @@ from typing import Tuple, Optional
 from packet import Packet
 from udp_socket import UDPSocket
 
+MSS = 512  # به عنوان مثال، 512 بایت
+WINDOW_SIZE = 1024  # به عنوان مثال، 1024 بایت
+TIMEOUT = 5.0  # به عنوان مثال، 5 ثانیه
+
 class Connection:
     def __init__(self, socket: UDPSocket, addr: Tuple[str, int], is_server: bool = False, initial_packet: Optional[Packet] = None):
         self.socket = socket
@@ -21,7 +25,7 @@ class Connection:
 
         self.timeout = 10.0
         self.buffer_size = 1024
-        self.window_size = 128
+        self.window_size = WINDOW_SIZE
         self.data_buffer = []  # Buffer for received data
         self.send_buffer = []  # Buffer for send data
         self.send_lock = threading.Lock()  
@@ -30,6 +34,55 @@ class Connection:
         self.send_thread = threading.Thread(target=self._send_data_thread)
         self.send_thread.daemon = True
         self.send_thread.start()
+
+        self.window_base = self.seq_num
+        self.sent_packets = {}
+        self.ack_counts = {}
+        self.recv_buffer = {}
+        self.expected_seq_num = self.ack_num
+
+        self.buffer_thread = threading.Thread(target=self._buffer_manager_thread)
+        self.buffer_thread.daemon = True
+        self.buffer_thread.start()
+
+    def _buffer_manager_thread(self):
+        while not self._stop_thread.is_set():
+            if self.state != "ESTABLISHED":
+                time.sleep(0.1)  # Wait until handshake completes
+                continue
+            with self.send_lock:
+                # Sending data from send_buffer
+                while self.send_buffer and len(self.sent_packets) < self.window_size // MSS:
+                    data = self.send_buffer.pop(0)
+                    packet = Packet(seq_num=self.seq_num, ack_num=self.ack_num, data=data)
+                    self._send_packet(packet)
+                    self.seq_num += len(data)
+                
+                # Check for timeouts and retransmit
+                current_time = time.time()
+                for seq_num, (packet, timestamp) in list(self.sent_packets.items()):
+                    if current_time - timestamp > TIMEOUT:
+                        self.socket.send(packet, self.addr)
+                        self.sent_packets[seq_num] = (packet, current_time)
+                        print(f"Retransmitted packet with seq_num={seq_num} due to timeout")
+                
+                # Process out-of-order received data
+                while self.expected_seq_num in self.recv_buffer:
+                    self.data_buffer.append(self.recv_buffer.pop(self.expected_seq_num))
+                    self.expected_seq_num += len(self.data_buffer[-1])
+                    ack_packet = Packet(seq_num=self.seq_num, ack_num=self.expected_seq_num, ack=True)
+                    self.socket.send(ack_packet, self.addr)
+                    print(f"Processed out-of-order data, sent ACK for {self.expected_seq_num}")
+            
+            # Receive and process packets
+            packet, addr = self.socket.receive()
+            if packet and addr == self.addr:
+                if packet.ack:
+                    self._process_ack(packet)
+                if packet.data:
+                    self.buffer_data(packet)
+            
+            time.sleep(0.1)  # Prevent CPU overload
 
     def three_way_handshake(self) -> None:
         if self.is_server:
@@ -91,6 +144,38 @@ class Connection:
                 self.seq_num += len(data)
                 return
         raise TimeoutError("Timeout waiting for ACK for data")
+
+    def _send_packet(self, packet: Packet) -> None:
+        with self.send_lock:
+            if packet.seq_num < self.window_base + self.window_size:
+                self.socket.send(packet, self.addr)
+                self.sent_packets[packet.seq_num] = (packet, time.time())
+                print(f"Sent packet with seq_num={packet.seq_num}")
+            else:
+                self.send_buffer.insert(0, packet.data)  # اگر خارج از پنجره باشد، دوباره به بافر اضافه شود
+
+    def _process_ack(self, packet: Packet) -> None:
+        with self.send_lock:
+            if packet.ack_num > self.window_base:
+                for seq_num in list(self.sent_packets.keys()):
+                    if seq_num + len(self.sent_packets[seq_num][0].data) <= packet.ack_num:
+                        del self.sent_packets[seq_num]
+                self.window_base = packet.ack_num  
+                self.send_condition.notify_all()
+            if packet.ack_num in self.ack_counts:
+                self.ack_counts[packet.ack_num] += 1
+                if self.ack_counts[packet.ack_num] >= 3:
+                    self._retransmit(packet.ack_num)
+            else:
+                self.ack_counts[packet.ack_num] = 1
+
+    def _retransmit(self, seq_num: int) -> None:
+        with self.send_lock:
+            if seq_num in self.sent_packets:
+                packet, _ = self.sent_packets[seq_num]
+                self.socket.send(packet, self.addr)
+                self.sent_packets[seq_num] = (packet, time.time())
+                print(f"Retransmitted packet with seq_num={seq_num} due to 3 duplicate ACKs")
 
     def handle_fin(self, packet: Packet) -> None:
         if self.state == "ESTABLISHED":
@@ -157,10 +242,27 @@ class Connection:
                     return
         raise TimeoutError("Timeout during connection close")
 
-    def buffer_data(self, packet: Packet):
-        """Store received data in buffer."""
+    def buffer_data(self, packet: Packet) -> None:
         if packet.data:
-            self.data_buffer.append(packet.data)
+            with self.send_lock:
+                if packet.seq_num == self.expected_seq_num:
+                    self.data_buffer.append(packet.data)
+                    self.expected_seq_num += len(packet.data)
+                    # ارسال ACK تجمیعی
+                    ack_packet = Packet(seq_num=self.seq_num, ack_num=self.expected_seq_num, ack=True)
+                    self.socket.send(ack_packet, self.addr)
+                    print(f"Sent ACK for seq_num={packet.seq_num}")
+                elif packet.seq_num > self.expected_seq_num:
+                    self.recv_buffer[packet.seq_num] = packet.data  # ذخیره خارج از نوبت
+                    ack_packet = Packet(seq_num=self.seq_num, ack_num=self.expected_seq_num, ack=True)
+                    self.socket.send(ack_packet, self.addr)
+                    print(f"Stored out-of-order packet seq_num={packet.seq_num}, sent ACK for {self.expected_seq_num}")
+                elif packet.seq_num < self.expected_seq_num:
+                    # نادیده گرفتن بسته تکراری و ارسال ACK
+                    ack_packet = Packet(seq_num=self.seq_num, ack_num=self.expected_seq_num, ack=True)
+                    self.socket.send(ack_packet, self.addr)
+                    print(f"Ignored duplicate packet seq_num={packet.seq_num}, sent ACK for {self.expected_seq_num}")
+
 
     def get_buffered_data(self):
         data = self.data_buffer.copy()
@@ -168,15 +270,15 @@ class Connection:
         return data
     
     def send(self, data: str) -> None:
-        """اضافه کردن داده به بافر برای ارسال"""
         if self.state != "ESTABLISHED":
             raise RuntimeError("Connection not established")
+        # تقسیم‌بندی داده‌ها به بسته‌های کوچک‌تر بر اساس MSS
+        segments = [data[i:i + MSS] for i in range(0, len(data), MSS)]
         with self.send_lock:
-            while sum(len(d) for d in self.send_buffer) + len(data) > min(self.buffer_size, self.window_size):
-                print(f"Buffer full or window size is blocking until space is available...")
-                self.send_condition.wait()
-            self.send_buffer.append(data)
-            print(f"Data added to send buffer: {data}")
+            for segment in segments:
+                if sum(len(d) for d in self.send_buffer) + len(segment) <= self.window_size:
+                    self.send_buffer.append(segment)
+                    print(f"Data added to send buffer: {segment}")
             self.send_condition.notify_all()  
 
     def _send_data_thread(self):
