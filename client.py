@@ -13,6 +13,7 @@ def client(host: str = "127.0.0.1", port: int = 12345, max_retries: int = 3):
         conn = Connection(sock, (host, port))
         sock.connection = conn
         retries = 0
+        
         while retries < max_retries:
             try:
                 conn.three_way_handshake()

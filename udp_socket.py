@@ -55,11 +55,11 @@ class UDPSocket:
 
     def close(self) -> None:
         if self.is_listening:
-            # رفتار سوکت سرور
+            # server
             self.is_listening = False
             print("Server socket is closing. No new connections will be accepted.")
             if hasattr(self, 'connection_manager') and self.connection_manager:
-                # بستن اتصالات ناتمام با استفاده از ConnectionManager
+                
                 try:
                     self.connection_manager.close_incomplete_connections()
                     print("All incomplete connections closed.")
@@ -67,7 +67,7 @@ class UDPSocket:
                     print(f"Error closing incomplete connections: {e}")
                 print("Completed connections remain valid.")
         else:
-            # رفتار سوکت کلاینت
+            #client
             if self.connection:
                 try:
                     self.connection.close()

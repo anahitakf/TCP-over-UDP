@@ -108,7 +108,6 @@ def server(host: str = "127.0.0.1", port: int = 12345, backlog: int = 5) -> None
                     print(f"Processing buffered data from {addr}: {data}\n")
                     sock.send(f"Server received: {data}", addr)
             except RuntimeError:
-                # No connections available, continue listening
                 pass
             except Exception as e:
                 print(f"Error in accept: {e}")

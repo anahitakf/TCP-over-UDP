@@ -1,7 +1,6 @@
 import json
 from typing import Optional
 import random
-
 class Packet:
     def __init__(self, seq_num: int, ack_num: int = 0, data: str = "", syn: bool = False, ack: bool = False, fin: bool = False, rst: bool = False, src_port: int = None, dst_port: int = None, window: int = 0):
         self.seq_num = seq_num
@@ -14,7 +13,7 @@ class Packet:
         self.rst = rst
         self.src_port = src_port
         self.dst_port = dst_port
-        self.window = window  # Receiver window size (rwnd)
+        self.window = window  # Receiver window size (rwnd) 
 
     def to_bytes(self) -> bytes:
         packet_dict = {

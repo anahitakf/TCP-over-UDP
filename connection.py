@@ -6,7 +6,7 @@ from udp_socket import UDPSocket
 import random
 from collections import deque
 
-MSS = 512  # Maximum Segment Size
+MSS = 512  
 TIMEOUT = 5.0  # Timeout for retransmissions
 RECEIVER_BUFFER_SIZE = 10  # Max packets in receiver buffer
 
@@ -336,7 +336,6 @@ class Connection:
                 continue
             print(f"Checking send_buffer: {len(self.send_buffer)} items")
             with self.send_lock:
-                # Send buffered data proactively
                 while self.send_buffer and len(self.sent_packets) * MSS < min(self.cwnd * MSS, self.rwnd * MSS):
                     data = self.send_buffer.pop(0)
                     packet = Packet(seq_num=self.seq_num, ack_num=self.ack_num, data=data, window=self.rwnd)
@@ -344,7 +343,7 @@ class Connection:
                     self.sent_packets[packet.seq_num] = (packet, time.time())
                     print(f"Sent packet with seq_num={packet.seq_num}, data={data}, cwnd={self.cwnd}, rwnd={self.rwnd}")
                     self.seq_num += len(data.encode('utf-8'))
-                # Handle timeouts
+
                 current_time = time.time()
                 for seq_num, (packet, timestamp) in list(self.sent_packets.items()):
                     if current_time - timestamp > TIMEOUT:
@@ -352,7 +351,7 @@ class Connection:
                         self.socket.send(packet, self.addr)
                         self.sent_packets[seq_num] = (packet, current_time)
                         print(f"Timeout, retransmitted seq_num={seq_num}, cwnd reset to {self.cwnd}")
-                # Process out-of-order packets
+                
                 while self.expected_seq_num in self.recv_buffer:
                     self.receiver_buffer.append(self.recv_buffer.pop(self.expected_seq_num))
                     self.expected_seq_num += len(self.receiver_buffer[-1].encode('utf-8'))
@@ -360,7 +359,7 @@ class Connection:
                     ack_packet = Packet(seq_num=self.seq_num, ack_num=self.expected_seq_num, ack=True, window=remaining_space)
                     self.socket.send(ack_packet, self.addr)
                     print(f"Processed out-of-order data, sent ACK for seq_num={self.seq_num}, ack_num={self.expected_seq_num}, window={remaining_space}")
-            # Process incoming packets
+
             packet, addr = self.socket.receive()
             if packet and addr == self.addr:
                 if packet.rst:
