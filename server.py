@@ -6,7 +6,6 @@ import time
 from typing import Dict
 from ConnectionManager import ConnectionManager
 
-
 def server(host: str = "127.0.0.1", port: int = 12345, backlog: int = 5) -> None:
     sock = None
     try:
@@ -14,9 +13,9 @@ def server(host: str = "127.0.0.1", port: int = 12345, backlog: int = 5) -> None
         sock.bind(host, port)
         sock.listen(backlog)
         print(f"Server successfully bound to {host}:{port}")
-        conn_manager = ConnectionManager(backlog=backlog, socket=sock)  # Pass socket to ConnectionManager
-        sock.connection_manager = conn_manager  # اتصال conn_manager به سوکت
-        should_stop = False  # Flag to control server shutdown
+        conn_manager = ConnectionManager(backlog=backlog, socket=sock)
+        sock.connection_manager = conn_manager
+        should_stop = False
 
         print(f"Server started, listening on {host}:{port}...")
         while sock.is_listening and not should_stop:
@@ -26,7 +25,7 @@ def server(host: str = "127.0.0.1", port: int = 12345, backlog: int = 5) -> None
                 MILLIS = int(time.time() * 1000)
                 try:
                     packet = Packet.from_bytes(data)
-                    print(f"[{MILLIS}] Parsed packet from {addr}: syn={packet.syn}, seq_num={packet.seq_num}, ack_num={packet.ack_num}\n")
+                    print(f"[{MILLIS}] Parsed packet from {addr}: syn={packet.syn}, seq_num={packet.seq_num}, ack_num={packet.ack_num}, data={packet.data}\n")
                 except ValueError as e:
                     print(f"Failed to parse packet from {addr}: {e}\n")
                     continue
@@ -49,7 +48,7 @@ def server(host: str = "127.0.0.1", port: int = 12345, backlog: int = 5) -> None
                             conn_manager.add_incomplete(conn)
                             conn.three_way_handshake()
                             conn_manager.move_to_completed(addr)
-                            print(f"connection with {addr} Established and moved to completed buffer\n")
+                            print(f"Connection with {addr} established and moved to completed buffer\n")
                         except (TimeoutError, RuntimeError) as e:
                             print(f"Failed to establish connection with {addr}: {e}\n")
                             conn_manager.remove_connection(addr)
@@ -71,25 +70,14 @@ def server(host: str = "127.0.0.1", port: int = 12345, backlog: int = 5) -> None
                             print(f"Received data from {addr}: {packet.data}\n")
                             if conn.state in ["ESTABLISHED", "CLOSE_WAIT"]:
                                 conn.buffer_data(packet)
-                                if packet.seq_num == conn.ack_num:
-                                    ack_packet = Packet(
-                                        seq_num=conn.seq_num,
-                                        ack_num=packet.seq_num + len(packet.data),
-                                        ack=True
-                                    )
-                                    sock.send(ack_packet, addr)
-                                    print(f"Sent ACK for data to {addr}\n")
-                                    conn.ack_num = packet.seq_num + len(packet.data)
-
-                                    buffered_data = conn.get_buffered_data()
-                                    for data in buffered_data:
-                                        print(f"Processing buffered data from {addr}: {data}\n")
-                                else:
-                                    print(f"Out-of-order packet from {addr}, expected seq_num={conn.ack_num}, got {packet.seq_num}\n")
+                                buffered_data = conn.get_buffered_data()
+                                for data in buffered_data:
+                                    print(f"Processing buffered data from {addr}: {data}\n")
+                                    sock.send(f"Server received: {data}", addr)
                             else:
-                                print(f"Out-of-order packet from {addr}, expected seq_num={conn.ack_num}, got {packet.seq_num}\n")
+                                print(f"Packet ignored in state {conn.state} from {addr}\n")
                         elif packet.ack and not packet.syn:
-                            print(f"Received ACK from {addr}: seq_num={packet.seq_num}, ack_num={packet.ack_num}\n")
+                            print(f"Received ACK from {addr}: seq_num={packet.seq_num}, ack_num={packet.ack_num}, window={packet.window}\n")
                             if conn.state == "LAST_ACK" and packet.ack_num == conn.seq_num:
                                 conn.state = "CLOSED"
                                 conn_manager.remove_connection(addr)
@@ -104,11 +92,10 @@ def server(host: str = "127.0.0.1", port: int = 12345, backlog: int = 5) -> None
                         print(f"Error processing packet from {addr}: {e}\n")
                         conn_manager.remove_connection(addr)
                         print(f"Connection with {addr} terminated due to error\n")
-
             except socket.timeout:
                 print("Socket timeout occurred, continuing to listen...")
                 conn_manager.cleanup_closed()
-                continue
+                break
             except socket.error as e:
                 print(f"Socket error: {e}")
                 raise
@@ -120,9 +107,9 @@ def server(host: str = "127.0.0.1", port: int = 12345, backlog: int = 5) -> None
                 for data in buffered_data:
                     print(f"Processing buffered data from {addr}: {data}\n")
                     sock.send(f"Server received: {data}", addr)
-            except RuntimeError as e:
-                print(f"Error in accept: {e}")
-                should_stop = True  # Stop server loop if no connections are available
+            except RuntimeError:
+                # No connections available, continue listening
+                pass
             except Exception as e:
                 print(f"Error in accept: {e}")
 
