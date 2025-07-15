@@ -19,6 +19,12 @@ def client(host: str = "127.0.0.1", port: int = 12345, max_retries: int = 3):
                 print(f"Connection Established with {host}:{port}\n")
                 break
             except (TimeoutError, OSError) as e:  
+                if "RST" in str(e):
+                    print(f"Received RST, closing connection with {host}:{port}")
+                    conn.state = "CLOSED"
+                    conn._stop_thread.set()
+                    conn.send_condition.notify_all()
+                    raise Exception(f"Connection terminated due to RST: {e}")
                 retries += 1
                 if retries == max_retries:
                     raise Exception(f"Failed to establish connection after {max_retries} attempts: {e}")

@@ -47,11 +47,8 @@ class Connection:
         self.buffer_thread.start()
 
     def _is_packet_valid(self, packet: Packet) -> bool:
-        """Check if a packet is valid based on state and sequence/acknowledgement numbers."""
-        if packet.rst:
-            return False  # RST packets are always considered invalid to trigger RST response
         if self.state == "CLOSED":
-            return packet.syn and not (packet.ack or packet.fin or packet.data)  # Only SYN allowed
+            return packet.syn and not (packet.ack or packet.fin or packet.data)
         elif self.state == "SYN_SENT":
             return packet.syn and packet.ack and packet.ack_num == self.seq_num + 1
         elif self.state == "SYN_RECEIVED":
@@ -65,7 +62,7 @@ class Connection:
                 return True
             return False
         elif self.state in ["FIN_WAIT_1", "FIN_WAIT_2", "CLOSE_WAIT", "LAST_ACK"]:
-            return (packet.ack and packet.ack_num >= self.seq_num) or packet.fin
+            return (packet.ack and packet.ack_num >= self.seq_num) or packet.fin or (packet.ack and not packet.data)  # اضافه کردن شرط برای ACK خالی
         return False
 
     def _send_rst(self, packet: Packet = None) -> None:
@@ -100,14 +97,15 @@ class Connection:
                 if addr != self.addr:
                     continue
                 if packet.rst:
-                    raise RuntimeError("Received RST during handshake")
-                if not self._is_packet_valid(packet):
-                    self._send_rst(packet)
-                    continue
+                    self.state = "CLOSED"
+                    self._stop_thread.set()
+                    self.send_condition.notify_all()
+                    raise RuntimeError("Received RST during handshake, connection closed")                
                 if packet.ack and packet.ack_num == self.seq_num:
                     self.state = "ESTABLISHED"
                     print(f"Server: Connection established with {self.addr}")
                     return
+
         else:
             syn_packet = Packet(seq_num=self.seq_num, syn=True)
             self.socket.send(syn_packet, self.addr)
@@ -123,7 +121,11 @@ class Connection:
                 if addr != self.addr:
                     continue
                 if packet.rst:
-                    raise RuntimeError("Received RST during handshake")
+                    self.state = "CLOSED"
+                    self._stop_thread.set()
+                    self.send_condition.notify_all()
+                    raise RuntimeError("Received RST during handshake, connection closed")
+                
                 if not self._is_packet_valid(packet):
                     self._send_rst(packet)
                     continue
@@ -195,6 +197,12 @@ class Connection:
                 print(f"Retransmitted packet with seq_num={seq_num} due to 3 duplicate ACKs")
 
     def handle_fin(self, packet: Packet) -> None:
+        if packet.rst:
+            self.state = "CLOSED"
+            self._stop_thread.set()
+            self.send_condition.notify_all()
+            print(f"Received RST from {self.addr}, connection closed")
+            return
         if self.state == "ESTABLISHED":
             if not self._is_packet_valid(packet):
                 self._send_rst(packet)
@@ -255,7 +263,10 @@ class Connection:
                 continue
             if packet.rst:
                 self.state = "CLOSED"
-                raise RuntimeError("Received RST during close")
+                self._stop_thread.set()
+                self.send_condition.notify_all()
+                print(f"Received RST from {self.addr}, connection closed")
+                return
             if not self._is_packet_valid(packet):
                 self._send_rst(packet)
                 continue
@@ -331,8 +342,12 @@ class Connection:
             packet, addr = self.socket.receive()
             if packet and addr == self.addr:
                 if packet.rst:
-                    self._send_rst(packet)
-                    continue
+                    self.state = "CLOSED"
+                    self._stop_thread.set()  
+                    self.send_condition.notify_all()  
+                    print(f"Received RST from {self.addr}, connection closed")
+                    return  
+                                 
                 if not self._is_packet_valid(packet):
                     self._send_rst(packet)
                     continue

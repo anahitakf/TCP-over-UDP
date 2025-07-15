@@ -30,6 +30,14 @@ def server(host: str = "127.0.0.1", port: int = 12345, backlog: int = 5) -> None
                 except ValueError as e:
                     print(f"Failed to parse packet from {addr}: {e}\n")
                     continue
+                if packet.rst:
+                    conn = conn_manager.find_connection(addr)
+                    if conn:
+                        conn.state = "CLOSED"
+                        conn_manager.remove_connection(addr)
+                        print(f"Received RST from {addr}, connection closed")
+                    continue
+
                 conn = conn_manager.find_connection(addr)
                 if conn is None:
                     if packet.syn and sock.is_listening:
